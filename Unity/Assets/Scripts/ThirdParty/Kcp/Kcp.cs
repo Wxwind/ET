@@ -1,231 +1,624 @@
 ﻿using System;
-using System.Runtime.InteropServices;
+using System.Threading;
+using static ET.IKCP;
+
+#pragma warning disable CS8601
+#pragma warning disable CS8602
+#pragma warning disable CS8625
+
+// ReSharper disable IdentifierTypo
+// ReSharper disable GrammarMistakeInComment
+// ReSharper disable PossibleNullReferenceException
+// ReSharper disable ConvertToAutoPropertyWithPrivateSetter
 
 namespace ET
 {
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    public delegate int KcpOutput(IntPtr buf, int len, IntPtr kcp, IntPtr user);
-    
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    public delegate void KcpLog(IntPtr buf, int len, IntPtr kcp, IntPtr user);
-
-    public static class Kcp
+    /// <summary>
+    ///     Kcp
+    /// </summary>
+    public sealed unsafe partial class Kcp : IDisposable
     {
-        public const int OneM = 1024 * 1024;
-        public const int InnerMaxWaitSize = 1024 * 1024;
-        public const int OuterMaxWaitSize = 1024 * 1024;
-        
-        
-        private static KcpOutput KcpOutput;
-        private static KcpLog KcpLog;
-        
-#if UNITY_IPHONE && !UNITY_EDITOR
-        const string KcpDLL = "__Internal";
-#else
-        const string KcpDLL = "kcp";
-#endif
-        
-        [DllImport(KcpDLL, CallingConvention=CallingConvention.Cdecl)]
-        private static extern uint ikcp_check(IntPtr kcp, uint current);
-        [DllImport(KcpDLL, CallingConvention=CallingConvention.Cdecl)]
-        private static extern IntPtr ikcp_create(uint conv, IntPtr user);
-        [DllImport(KcpDLL, CallingConvention=CallingConvention.Cdecl)]
-        private static extern void ikcp_flush(IntPtr kcp);
-        [DllImport(KcpDLL, CallingConvention=CallingConvention.Cdecl)]
-        private static extern uint ikcp_getconv(IntPtr ptr);
-        [DllImport(KcpDLL, CallingConvention=CallingConvention.Cdecl)]
-        private static extern int ikcp_input(IntPtr kcp, byte[] data, int offset, int size);
-        [DllImport(KcpDLL, CallingConvention=CallingConvention.Cdecl)]
-        private static extern int ikcp_nodelay(IntPtr kcp, int nodelay, int interval, int resend, int nc);
-        [DllImport(KcpDLL, CallingConvention=CallingConvention.Cdecl)]
-        private static extern int ikcp_peeksize(IntPtr kcp);
-        [DllImport(KcpDLL, CallingConvention=CallingConvention.Cdecl)]
-        private static extern int ikcp_recv(IntPtr kcp, byte[] buffer, int index, int len);
-        [DllImport(KcpDLL, CallingConvention=CallingConvention.Cdecl)]
-        private static extern void ikcp_release(IntPtr kcp);
-        [DllImport(KcpDLL, CallingConvention=CallingConvention.Cdecl)]
-        private static extern int ikcp_send(IntPtr kcp, byte[] buffer, int offset, int len);
-        [DllImport(KcpDLL, CallingConvention=CallingConvention.Cdecl)]
-        private static extern void ikcp_setminrto(IntPtr ptr, int minrto);
-        [DllImport(KcpDLL, CallingConvention=CallingConvention.Cdecl)]
-        private static extern int ikcp_setmtu(IntPtr kcp, int mtu);
-        [DllImport(KcpDLL, CallingConvention=CallingConvention.Cdecl)]
-        private static extern void ikcp_setoutput(KcpOutput output);
-        
-        [DllImport(KcpDLL, CallingConvention=CallingConvention.Cdecl)]
-        private static extern void ikcp_setlog(KcpLog log);
-        
-        [DllImport(KcpDLL, CallingConvention=CallingConvention.Cdecl)]
-        private static extern void ikcp_update(IntPtr kcp, uint current);
-        [DllImport(KcpDLL, CallingConvention=CallingConvention.Cdecl)]
-        private static extern int ikcp_waitsnd(IntPtr kcp);
-        [DllImport(KcpDLL, CallingConvention=CallingConvention.Cdecl)]
-        private static extern int ikcp_wndsize(IntPtr kcp, int sndwnd, int rcvwnd);
-        
-        public static uint KcpCheck(IntPtr kcp, uint current)
+        /// <summary>
+        ///     Kcp
+        /// </summary>
+        private IKCPCB* _kcp;
+
+        /// <summary>
+        ///     Output function
+        /// </summary>
+        private KcpCallback _output;
+
+        /// <summary>
+        ///     Buffer
+        /// </summary>
+        private byte[] _buffer;
+
+        /// <summary>
+        ///     Disposed
+        /// </summary>
+        private int _disposed;
+
+        /// <summary>
+        ///     Structure
+        /// </summary>
+        /// <param name="output">Output</param>
+        public Kcp(KcpCallback output) : this(0, output)
         {
-            if (kcp == IntPtr.Zero)
-            {
-                throw new Exception($"kcp error, kcp point is zero");
-            }
-            uint ret = ikcp_check(kcp, current);
-            return ret;
-        }
-        
-        public static IntPtr KcpCreate(uint conv, IntPtr user)
-        {
-            return ikcp_create(conv, user);
         }
 
-        public static void KcpFlush(IntPtr kcp)
+        /// <summary>
+        ///     Structure
+        /// </summary>
+        /// <param name="conv">ConversationId</param>
+        /// <param name="output">Output</param>
+        public Kcp(uint conv, KcpCallback output)
         {
-            if (kcp == IntPtr.Zero)
-            {
-                throw new Exception($"kcp error, kcp point is zero");
-            }
-            ikcp_flush(kcp);
+            _kcp = ikcp_create(conv, ref _buffer);
+            _output = output;
         }
 
-        public static uint KcpGetconv(IntPtr ptr)
+        /// <summary>
+        ///     Set
+        /// </summary>
+        public bool IsSet => _kcp != null;
+
+        /// <summary>
+        ///     Conversation id
+        /// </summary>
+        public uint ConversationId => _kcp->conv;
+
+        /// <summary>
+        ///     Maximum transmission unit
+        /// </summary>
+        public uint MaximumTransmissionUnit => _kcp->mtu;
+
+        /// <summary>
+        ///     Maximum segment size
+        /// </summary>
+        public uint MaximumSegmentSize => _kcp->mss;
+
+        /// <summary>
+        ///     Connection state
+        /// </summary>
+        public int State => _kcp->state;
+
+        /// <summary>
+        ///     The sequence number of the first unacknowledged packet
+        /// </summary>
+        public uint SendUna => _kcp->snd_una;
+
+        /// <summary>
+        ///     The sequence number for the next packet to be sent
+        /// </summary>
+        public uint SendNext => _kcp->snd_nxt;
+
+        /// <summary>
+        ///     The sequence number for the next packet expected to be received
+        /// </summary>
+        public uint ReceiveNext => _kcp->rcv_nxt;
+
+        /// <summary>
+        ///     Slow start threshold for congestion control
+        /// </summary>
+        public uint SlowStartThreshold => _kcp->ssthresh;
+
+        /// <summary>
+        ///     Round-trip time variance
+        /// </summary>
+        public int RxRttval => _kcp->rx_rttval;
+
+        /// <summary>
+        ///     Smoothed round-trip time
+        /// </summary>
+        public int RxSrtt => _kcp->rx_srtt;
+
+        /// <summary>
+        ///     Retransmission timeout
+        /// </summary>
+        public int RxRto => _kcp->rx_rto;
+
+        /// <summary>
+        ///     Minimum retransmission timeout
+        /// </summary>
+        public int RxMinrto => _kcp->rx_minrto;
+
+        /// <summary>
+        ///     Send window size
+        /// </summary>
+        public uint SendWindowSize => _kcp->snd_wnd;
+
+        /// <summary>
+        ///     Receive window size
+        /// </summary>
+        public uint ReceiveWindowSize => _kcp->rcv_wnd;
+
+        /// <summary>
+        ///     Remote window size
+        /// </summary>
+        public uint RemoteWindowSize => _kcp->rmt_wnd;
+
+        /// <summary>
+        ///     Congestion window size
+        /// </summary>
+        public uint CongestionWindowSize => _kcp->cwnd;
+
+        /// <summary>
+        ///     Probe variable for fast recovery
+        /// </summary>
+        public uint Probe => _kcp->probe;
+
+        /// <summary>
+        ///     Current timestamp
+        /// </summary>
+        public uint Current => _kcp->current;
+
+        /// <summary>
+        ///     Flush interval
+        /// </summary>
+        public uint Interval => _kcp->interval;
+
+        /// <summary>
+        ///     Timestamp for the next flush
+        /// </summary>
+        public uint TimestampFlush => _kcp->ts_flush;
+
+        /// <summary>
+        ///     Number of retransmissions
+        /// </summary>
+        public uint Transmissions => _kcp->xmit;
+
+        /// <summary>
+        ///     Number of packets in the receive buffer
+        /// </summary>
+        public uint ReceiveBufferCount => _kcp->nrcv_buf;
+
+        /// <summary>
+        ///     Number of packets in the receive queue
+        /// </summary>
+        public uint ReceiveQueueCount => _kcp->nrcv_que;
+
+        /// <summary>
+        ///     Number of packets wait to receive
+        /// </summary>
+        public uint WaitReceiveCount => _kcp->nrcv_buf + _kcp->nrcv_que;
+
+        /// <summary>
+        ///     Number of packets in the send buffer
+        /// </summary>
+        public uint SendBufferCount => _kcp->nsnd_buf;
+
+        /// <summary>
+        ///     Number of packets in the send queue
+        /// </summary>
+        public uint SendQueueCount => _kcp->nsnd_que;
+
+        /// <summary>
+        ///     Number of packets wait to send
+        /// </summary>
+        public uint WaitSendCount => _kcp->nsnd_buf + _kcp->nsnd_que;
+
+        /// <summary>
+        ///     Whether Nagle's algorithm is disabled
+        /// </summary>
+        public uint NoDelay => _kcp->nodelay;
+
+        /// <summary>
+        ///     Whether the KCP connection has been updated
+        /// </summary>
+        public uint Updated => _kcp->updated;
+
+        /// <summary>
+        ///     Timestamp for the next probe
+        /// </summary>
+        public uint TimestampProbe => _kcp->ts_probe;
+
+        /// <summary>
+        ///     Probe wait time
+        /// </summary>
+        public uint ProbeWait => _kcp->probe_wait;
+
+        /// <summary>
+        ///     Incremental increase
+        /// </summary>
+        public uint Increment => _kcp->incr;
+
+        /// <summary>
+        ///     Pointer to the acknowledge list
+        /// </summary>
+        public uint* AckList => _kcp->acklist;
+
+        /// <summary>
+        ///     Count of acknowledges
+        /// </summary>
+        public uint AckCount => _kcp->ackcount;
+
+        /// <summary>
+        ///     Number of acknowledge blocks
+        /// </summary>
+        public uint AckBlock => _kcp->ackblock;
+
+        /// <summary>
+        ///     Buffer
+        /// </summary>
+        public byte[] Buffer => _buffer;
+
+        /// <summary>
+        ///     Fast resend trigger count
+        /// </summary>
+        public int FastResend => _kcp->fastresend;
+
+        /// <summary>
+        ///     Fast resend limit
+        /// </summary>
+        public int FastResendLimit => _kcp->fastlimit;
+
+        /// <summary>
+        ///     Whether congestion control is disabled
+        /// </summary>
+        public int NoCongestionWindow => _kcp->nocwnd;
+
+        /// <summary>
+        ///     Whether stream mode is enabled
+        /// </summary>
+        public int StreamMode => _kcp->stream;
+
+        /// <summary>
+        ///     Output function pointer
+        /// </summary>
+        public KcpCallback Output => _output;
+
+        /// <summary>
+        ///     Dispose
+        /// </summary>
+        public void Dispose()
         {
-            if (ptr == IntPtr.Zero)
-            {
-                throw new Exception($"kcp error, kcp point is zero");
-            }
-            return ikcp_getconv(ptr);
+            if (Interlocked.CompareExchange(ref _disposed, 1, 0) != 0)
+                return;
+            ikcp_release(_kcp);
+            _kcp = null;
+            _output = null;
+            _buffer = null;
+            GC.SuppressFinalize(this);
         }
 
-        public static int KcpInput(IntPtr kcp, byte[] buffer, int offset, int len)
+        /// <summary>
+        ///     Set output
+        /// </summary>
+        /// <param name="output">Output</param>
+        public void SetOutput(KcpCallback output) => _output = output;
+
+        /// <summary>
+        ///     Destructure
+        /// </summary>
+        ~Kcp() => Dispose();
+
+        /// <summary>
+        ///     Send
+        /// </summary>
+        /// <param name="buffer">Buffer</param>
+        /// <returns>Sent bytes</returns>
+        public int Send(byte[] buffer)
         {
-            if (kcp == IntPtr.Zero)
-            {
-                throw new Exception($"kcp error, kcp point is zero");
-            }
-            if (offset + len > buffer.Length)
-            {
-                throw new Exception($"kcp error, KcpInput {buffer.Length} {offset} {len}");
-            }
-            int ret = ikcp_input(kcp, buffer, offset, len);
-            return ret;
+            fixed (byte* src = &buffer[0])
+                return ikcp_send(_kcp, src, buffer.Length);
         }
 
-        public static int KcpNodelay(IntPtr kcp, int nodelay, int interval, int resend, int nc)
+        /// <summary>
+        ///     Send
+        /// </summary>
+        /// <param name="buffer">Buffer</param>
+        /// <param name="length">Length</param>
+        /// <returns>Sent bytes</returns>
+        public int Send(byte[] buffer, int length)
         {
-            if (kcp == IntPtr.Zero)
-            {
-                throw new Exception($"kcp error, kcp point is zero");
-            }
-            return ikcp_nodelay(kcp, nodelay, interval, resend, nc);
+            fixed (byte* src = &buffer[0])
+                return ikcp_send(_kcp, src, length);
         }
 
-        public static int KcpPeeksize(IntPtr kcp)
+        /// <summary>
+        ///     Send
+        /// </summary>
+        /// <param name="buffer">Buffer</param>
+        /// <param name="offset">Offset</param>
+        /// <param name="length">Length</param>
+        /// <returns>Sent bytes</returns>
+        public int Send(byte[] buffer, int offset, int length)
         {
-            if (kcp == IntPtr.Zero)
-            {
-                throw new Exception($"kcp error, kcp point is zero");
-            }
-            int ret = ikcp_peeksize(kcp);
-            return ret;
+            fixed (byte* src = &buffer[offset])
+                return ikcp_send(_kcp, src, length);
         }
 
-        public static int KcpRecv(IntPtr kcp, byte[] buffer, int index, int len)
+        /// <summary>
+        ///     Send
+        /// </summary>
+        /// <param name="buffer">Buffer</param>
+        /// <returns>Sent bytes</returns>
+        public int Send(ReadOnlySpan<byte> buffer)
         {
-            if (kcp == IntPtr.Zero)
-            {
-                throw new Exception($"kcp error, kcp point is zero");
-            }
-
-            if (buffer.Length < index + len)
-            {
-                throw new Exception($"kcp error, KcpRecv error: {index} {len}");
-            }
-            
-            int ret = ikcp_recv(kcp, buffer, index, len);
-            return ret;
+            fixed (byte* src = &buffer[0])
+                return ikcp_send(_kcp, src, buffer.Length);
         }
 
-        public static void KcpRelease(IntPtr kcp)
+        /// <summary>
+        ///     Send
+        /// </summary>
+        /// <param name="buffer">Buffer</param>
+        /// <returns>Sent bytes</returns>
+        public int Send(ReadOnlyMemory<byte> buffer)
         {
-            if (kcp == IntPtr.Zero)
-            {
-                throw new Exception($"kcp error, kcp point is zero");
-            }
-            ikcp_release(kcp);
+            fixed (byte* src = &buffer.Span[0])
+                return ikcp_send(_kcp, src, buffer.Length);
         }
 
-        public static int KcpSend(IntPtr kcp, byte[] buffer, int offset, int len)
+        /// <summary>
+        ///     Send
+        /// </summary>
+        /// <param name="buffer">Buffer</param>
+        /// <returns>Sent bytes</returns>
+        public int Send(ArraySegment<byte> buffer)
         {
-            if (kcp == IntPtr.Zero)
-            {
-                throw new Exception($"kcp error, kcp point is zero");
-            }
-
-            if (offset + len > buffer.Length)
-            {
-                throw new Exception($"kcp error, KcpSend {buffer.Length} {offset} {len}");
-            }
-            
-            int ret = ikcp_send(kcp, buffer, offset, len);
-            return ret;
+            fixed (byte* src = &buffer.Array[buffer.Offset])
+                return ikcp_send(_kcp, src, buffer.Count);
         }
 
-        public static void KcpSetminrto(IntPtr kcp, int minrto)
+        /// <summary>
+        ///     Send
+        /// </summary>
+        /// <param name="buffer">Buffer</param>
+        /// <param name="length">Length</param>
+        /// <returns>Sent bytes</returns>
+        public int Send(byte* buffer, int length) => ikcp_send(_kcp, buffer, length);
+
+        /// <summary>
+        ///     Send
+        /// </summary>
+        /// <param name="buffer">Buffer</param>
+        /// <param name="offset">Offset</param>
+        /// <param name="length">Length</param>
+        /// <returns>Sent bytes</returns>
+        public int Send(byte* buffer, int offset, int length) => ikcp_send(_kcp, buffer + offset, length);
+
+        /// <summary>
+        ///     Input
+        /// </summary>
+        /// <param name="buffer">Buffer</param>
+        /// <returns>Input bytes</returns>
+        public int Input(byte[] buffer)
         {
-            if (kcp == IntPtr.Zero)
-            {
-                throw new Exception($"kcp error, kcp point is zero");
-            }
-            ikcp_setminrto(kcp, minrto);
+            fixed (byte* src = &buffer[0])
+                return ikcp_input(_kcp, src, buffer.Length);
         }
 
-        public static int KcpSetmtu(IntPtr kcp, int mtu)
+        /// <summary>
+        ///     Input
+        /// </summary>
+        /// <param name="buffer">Buffer</param>
+        /// <param name="length">Length</param>
+        /// <returns>Input bytes</returns>
+        public int Input(byte[] buffer, int length)
         {
-            if (kcp == IntPtr.Zero)
-            {
-                throw new Exception($"kcp error, kcp point is zero");
-            }
-            return ikcp_setmtu(kcp, mtu);
+            fixed (byte* src = &buffer[0])
+                return ikcp_input(_kcp, src, length);
         }
 
-        public static void KcpSetoutput(KcpOutput output)
+        /// <summary>
+        ///     Input
+        /// </summary>
+        /// <param name="buffer">Buffer</param>
+        /// <param name="offset">Offset</param>
+        /// <param name="length">Length</param>
+        /// <returns>Input bytes</returns>
+        public int Input(byte[] buffer, int offset, int length)
         {
-            KcpOutput = output;
-            ikcp_setoutput(KcpOutput);
-        }
-        
-        public static void KcpSetLog(KcpLog kcpLog)
-        {
-            KcpLog = kcpLog;
-            ikcp_setlog(KcpLog);
-        }
-
-        public static void KcpUpdate(IntPtr kcp, uint current)
-        {
-            if (kcp == IntPtr.Zero)
-            {
-                throw new Exception($"kcp error, kcp point is zero");
-            }
-            ikcp_update(kcp, current);
+            fixed (byte* src = &buffer[offset])
+                return ikcp_input(_kcp, src, length);
         }
 
-        public static int KcpWaitsnd(IntPtr kcp)
+        /// <summary>
+        ///     Input
+        /// </summary>
+        /// <param name="buffer">Buffer</param>
+        /// <returns>Input bytes</returns>
+        public int Input(ReadOnlySpan<byte> buffer)
         {
-            if (kcp == IntPtr.Zero)
-            {
-                throw new Exception($"kcp error, kcp point is zero");
-            }
-            int ret = ikcp_waitsnd(kcp);
-            return ret;
+            fixed (byte* src = &buffer[0])
+                return ikcp_input(_kcp, src, buffer.Length);
         }
 
-        public static int KcpWndsize(IntPtr kcp, int sndwnd, int rcvwnd)
+        /// <summary>
+        ///     Input
+        /// </summary>
+        /// <param name="buffer">Buffer</param>
+        /// <returns>Input bytes</returns>
+        public int Input(ReadOnlyMemory<byte> buffer)
         {
-            if (kcp == IntPtr.Zero)
-            {
-                throw new Exception($"kcp error, kcp point is zero");
-            }
-            return ikcp_wndsize(kcp, sndwnd, rcvwnd);
+            fixed (byte* src = &buffer.Span[0])
+                return ikcp_input(_kcp, src, buffer.Length);
         }
+
+        /// <summary>
+        ///     Input
+        /// </summary>
+        /// <param name="buffer">Buffer</param>
+        /// <returns>Input bytes</returns>
+        public int Input(ArraySegment<byte> buffer)
+        {
+            fixed (byte* src = &buffer.Array[buffer.Offset])
+                return ikcp_input(_kcp, src, buffer.Count);
+        }
+
+        /// <summary>
+        ///     Input
+        /// </summary>
+        /// <param name="buffer">Buffer</param>
+        /// <param name="length">Length</param>
+        /// <returns>Input bytes</returns>
+        public int Input(byte* buffer, int length) => ikcp_input(_kcp, buffer, length);
+
+        /// <summary>
+        ///     Input
+        /// </summary>
+        /// <param name="buffer">Buffer</param>
+        /// <param name="offset">Offset</param>
+        /// <param name="length">Length</param>
+        /// <returns>Input bytes</returns>
+        public int Input(byte* buffer, int offset, int length) => ikcp_input(_kcp, buffer + offset, length);
+
+        /// <summary>
+        ///     Peek size
+        /// </summary>
+        /// <returns>Peeked size</returns>
+        public int PeekSize() => ikcp_peeksize(_kcp);
+
+        /// <summary>
+        ///     Receive
+        /// </summary>
+        /// <param name="buffer">Buffer</param>
+        /// <returns>Received bytes</returns>
+        public int Receive(byte[] buffer)
+        {
+            fixed (byte* dest = &buffer[0])
+                return ikcp_recv(_kcp, dest, buffer.Length);
+        }
+
+        /// <summary>
+        ///     Receive
+        /// </summary>
+        /// <param name="buffer">Buffer</param>
+        /// <param name="length">Length</param>
+        /// <returns>Received bytes</returns>
+        public int Receive(byte[] buffer, int length)
+        {
+            fixed (byte* dest = &buffer[0])
+                return ikcp_recv(_kcp, dest, length);
+        }
+
+        /// <summary>
+        ///     Receive
+        /// </summary>
+        /// <param name="buffer">Buffer</param>
+        /// <param name="offset">Offset</param>
+        /// <param name="length">Length</param>
+        /// <returns>Received bytes</returns>
+        public int Receive(byte[] buffer, int offset, int length)
+        {
+            fixed (byte* dest = &buffer[offset])
+                return ikcp_recv(_kcp, dest, length);
+        }
+
+        /// <summary>
+        ///     Receive
+        /// </summary>
+        /// <param name="buffer">Buffer</param>
+        /// <returns>Received bytes</returns>
+        public int Receive(Span<byte> buffer)
+        {
+            fixed (byte* dest = &buffer[0])
+                return ikcp_recv(_kcp, dest, buffer.Length);
+        }
+
+        /// <summary>
+        ///     Receive
+        /// </summary>
+        /// <param name="buffer">Buffer</param>
+        /// <returns>Received bytes</returns>
+        public int Receive(Memory<byte> buffer)
+        {
+            fixed (byte* dest = &buffer.Span[0])
+                return ikcp_recv(_kcp, dest, buffer.Length);
+        }
+
+        /// <summary>
+        ///     Receive
+        /// </summary>
+        /// <param name="buffer">Buffer</param>
+        /// <returns>Received bytes</returns>
+        public int Receive(ArraySegment<byte> buffer)
+        {
+            fixed (byte* dest = &buffer.Array[buffer.Offset])
+                return ikcp_recv(_kcp, dest, buffer.Count);
+        }
+
+        /// <summary>
+        ///     Receive
+        /// </summary>
+        /// <param name="buffer">Buffer</param>
+        /// <param name="length">Length</param>
+        /// <returns>Received bytes</returns>
+        public int Receive(byte* buffer, int length) => ikcp_recv(_kcp, buffer, length);
+
+        /// <summary>
+        ///     Receive
+        /// </summary>
+        /// <param name="buffer">Buffer</param>
+        /// <param name="offset">Offset</param>
+        /// <param name="length">Length</param>
+        /// <returns>Received bytes</returns>
+        public int Receive(byte* buffer, int offset, int length) => ikcp_recv(_kcp, buffer + offset, length);
+
+        /// <summary>
+        ///     Update
+        /// </summary>
+        /// <param name="current">Timestamp</param>
+        public void Update(uint current) => ikcp_update(_kcp, current, _output, _buffer);
+
+        /// <summary>
+        ///     Check
+        /// </summary>
+        /// <param name="current">Timestamp</param>
+        /// <returns>Next flush timestamp</returns>
+        public uint Check(uint current) => ikcp_check(_kcp, current);
+
+        /// <summary>
+        ///     Flush
+        /// </summary>
+        public void Flush() => ikcp_flush(_kcp, _output, _buffer);
+
+        /// <summary>
+        ///     Set maximum transmission unit
+        /// </summary>
+        /// <param name="mtu">Maximum transmission unit</param>
+        /// <returns>Set</returns>
+        public int SetMtu(int mtu) => ikcp_setmtu(_kcp, mtu, ref _buffer);
+
+        /// <summary>
+        ///     Set flush interval
+        /// </summary>
+        /// <param name="interval">Flush interval</param>
+        public void SetInterval(int interval) => ikcp_interval(_kcp, interval);
+
+        /// <summary>
+        ///     Set no delay
+        /// </summary>
+        /// <param name="nodelay">Whether Nagle's algorithm is disabled</param>
+        /// <param name="interval">Flush interval</param>
+        /// <param name="resend">Fast resend trigger count</param>
+        /// <param name="nc">No congestion window</param>
+        public void SetNoDelay(int nodelay, int interval, int resend, int nc) => ikcp_nodelay(_kcp, nodelay, interval, resend, nc);
+
+        /// <summary>
+        ///     Set window size
+        /// </summary>
+        /// <param name="sndwnd">Send window size</param>
+        /// <param name="rcvwnd">Receive window size</param>
+        public void SetWindowSize(int sndwnd, int rcvwnd) => ikcp_wndsize(_kcp, sndwnd, rcvwnd);
+
+        /// <summary>
+        ///     Set fast resend limit
+        /// </summary>
+        /// <param name="fastlimit">Fast resend limit</param>
+        public void SetFastResendLimit(int fastlimit) => ikcp_fastresendlimit(_kcp, fastlimit);
+
+        /// <summary>
+        ///     Set whether stream mode is enabled
+        /// </summary>
+        /// <param name="stream">Whether stream mode is enabled</param>
+        public void SetStreamMode(int stream) => ikcp_streammode(_kcp, stream);
+
+        /// <summary>
+        ///     Set minimum retransmission timeout
+        /// </summary>
+        /// <param name="minrto">Minimum retransmission timeout</param>
+        public void SetMinrto(int minrto) => ikcp_minrto(_kcp, minrto);
     }
 }
-

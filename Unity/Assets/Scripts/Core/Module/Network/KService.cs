@@ -29,8 +29,6 @@ namespace ET
     public sealed class KService: AService
     {
         public const int ConnectTimeoutTime = 20 * 1000;
-
-        public readonly Dictionary<IntPtr, KChannel> KcpPtrChannels = new Dictionary<IntPtr, KChannel>();
         
         // KService创建的时间
         private readonly long startTime;
@@ -45,67 +43,6 @@ namespace ET
         }
 
         private Socket socket;
-
-
-#region 回调方法
-
-        static KService()
-        {
-            //Kcp.KcpSetLog(KcpLog);
-            Kcp.KcpSetoutput(KcpOutput);
-        }
-        
-#if ENABLE_IL2CPP
-		[AOT.MonoPInvokeCallback(typeof(KcpOutput))]
-#endif
-        private static void KcpLog(IntPtr bytes, int len, IntPtr kcp, IntPtr user)
-        {
-            try
-            {
-                unsafe
-                {
-                    //Marshal.Copy(bytes, logBuffer, 0, len);
-                    Span<byte> span = new Span<byte>(bytes.ToPointer(), len);
-                    Log.Info(span.ToString());
-                }
-            }
-            catch (Exception e)
-            {
-                Log.Error(e);
-            }
-        }
-
-#if ENABLE_IL2CPP
-		[AOT.MonoPInvokeCallback(typeof(KcpOutput))]
-#endif
-        private static int KcpOutput(IntPtr bytes, int len, IntPtr kcp, IntPtr user)
-        {
-            try
-            {
-                if (kcp == IntPtr.Zero)
-                {
-                    return 0;
-                }
-                
-                KService kService = NetServices.Instance.Get(user.ToInt32()) as KService;
-                
-                if (!kService.KcpPtrChannels.TryGetValue(kcp, out KChannel kChannel))
-                {
-                    return 0;
-                }
-                
-                kChannel.Output(bytes, len);
-            }
-            catch (Exception e)
-            {
-                Log.Error(e);
-                return len;
-            }
-
-            return len;
-        }
-
-#endregion
 
         public KService(IPEndPoint ipEndPoint, ServiceType serviceType)
         {
@@ -481,6 +418,7 @@ namespace ET
             kChannel.Error = error;
             
             Log.Info($"kservice remove channel: {id} {kChannel.LocalConn} {kChannel.RemoteConn} {error}");
+            //TODO: 下面这行代码在8.1中是没有的，7.2才有
             this.localConnChannels.Remove(id);
             this.localConnChannels.Remove(kChannel.LocalConn);
             if (this.waitAcceptChannels.TryGetValue(kChannel.RemoteConn, out KChannel waitChannel))
@@ -490,8 +428,6 @@ namespace ET
                     this.waitAcceptChannels.Remove(kChannel.RemoteConn);
                 }
             }
-
-            this.KcpPtrChannels.Remove(kChannel.kcp);
             
             kChannel.Dispose();
         }
