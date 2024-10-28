@@ -7,8 +7,6 @@ using System.Runtime.InteropServices;
 
 namespace ET
 {
-
-	
 	public struct KcpWaitPacket
 	{
 		public long ActorId;

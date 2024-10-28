@@ -12,14 +12,16 @@ namespace ET.Server
         [ObjectSystem]
         public class RouterComponentAwakeSystem: AwakeSystem<RouterComponent, IPEndPoint, string>
         {
+            public const int OneM = 1024 * 1024;
+            
             protected override void Awake(RouterComponent self, IPEndPoint outerAddress, string innerIP)
             {
                 self.OuterSocket = new Socket(outerAddress.AddressFamily, SocketType.Dgram, ProtocolType.Udp);
                 self.OuterSocket.Bind(outerAddress);
                 if (!RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
                 {
-                    self.OuterSocket.SendBufferSize = 16 * Kcp.OneM;
-                    self.OuterSocket.ReceiveBufferSize = 16 * Kcp.OneM;
+                    self.OuterSocket.SendBufferSize = 16 *OneM;
+                    self.OuterSocket.ReceiveBufferSize = 16 * OneM;
                 }
 
                 self.InnerSocket = new Socket(outerAddress.AddressFamily, SocketType.Dgram, ProtocolType.Udp);
@@ -27,8 +29,8 @@ namespace ET.Server
 
                 if (!RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
                 {
-                    self.InnerSocket.SendBufferSize = 16 * Kcp.OneM;
-                    self.InnerSocket.ReceiveBufferSize = 16 * Kcp.OneM;
+                    self.InnerSocket.SendBufferSize = 16 *OneM;
+                    self.InnerSocket.ReceiveBufferSize = 16 * OneM;
                 }
                 
                 NetworkHelper.SetSioUdpConnReset(self.OuterSocket);
